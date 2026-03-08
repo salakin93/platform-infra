@@ -1,0 +1,160 @@
+version: "3.9"
+
+services:
+  identity-db:
+    image: postgres:16
+    container_name: identity-db
+    environment:
+      POSTGRES_DB: identity_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - identity_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d identity_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  document-db:
+    image: postgres:16
+    container_name: document-db
+    environment:
+      POSTGRES_DB: document_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5435:5432"
+    volumes:
+      - document_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d document_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  config-service:
+    build:
+      context: ../config-service
+    container_name: config-service
+    ports:
+      - "8888:8888"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    restart: unless-stopped
+
+  discovery-service:
+    build:
+      context: ../discovery-service
+    container_name: discovery-service
+    ports:
+      - "8761:8761"
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-service:8888
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - config-service
+    restart: unless-stopped
+
+  identity-service:
+    build:
+      context: ../identity-service
+    container_name: identity-servicedocker-compose.yml
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-service:8888
+      EUREKA_DEFAULT_ZONE: http://discovery-service:8761/eureka
+      DB_URL: jdbc:postgresql://identity-db:5432/identity_db
+      DB_USER: postgres
+      DB_PASS: postgres
+      JWT_ISSUER: pdf-platform
+      JWT_TTL_SECONDS: 86400
+      JWT_PRIVATE_KEY_PATH: /run/keys/private.pem
+      JWT_PUBLIC_KEY_PATH: /run/keys/public.pem
+      SPRING_PROFILES_ACTIVE: docker
+    volumes:
+      - ../identity-service/private.pem:/run/keys/private.pem:ro
+      - ../identity-service/public.pem:/run/keys/public.pem:ro
+    depends_on:
+      config-service:
+        condition: service_started
+      discovery-service:
+        condition: service_started
+      identity-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  document-service:
+    build:
+      context: ../document-service
+    container_name: document-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-service:8888
+      EUREKA_DEFAULT_ZONE: http://discovery-service:8761/eureka
+      DB_URL: jdbc:postgresql://document-db:5432/document_db
+      DB_USER: postgres
+      DB_PASS: postgres
+      FILE_STORAGE_PATH: /data/uploads
+      JWT_PUBLIC_KEY_PATH: /run/keys/public.pem
+      SPRING_PROFILES_ACTIVE: docker
+    volumes:
+      - ../document-service/public.pem:/run/keys/public.pem:ro
+      - document_uploads:/data/uploads
+    depends_on:
+      config-service:
+        condition: service_started
+      discovery-service:
+        condition: service_started
+      document-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ../ai-service
+    container_name: ai-service
+    ports:
+      - "8090:8090"
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-service:8888
+      EUREKA_DEFAULT_ZONE: http://discovery-service:8761/eureka
+      JWT_PUBLIC_KEY_PATH: /run/keys/public.pem
+      CHATPDF_API_KEY: ${CHATPDF_API_KEY:-}
+      CHATPDF_API_URL: https://api.chatpdf.com
+      SPRING_PROFILES_ACTIVE: docker
+    volumes:
+      - ../ai-service/public.pem:/run/keys/public.pem:ro
+    depends_on:
+      config-service:
+        condition: service_started
+      discovery-service:
+        condition: service_started
+    restart: unless-stopped
+
+  gateway-service:
+    build:
+      context: ../gateway-service
+    container_name: gateway-service
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-service:8888
+      EUREKA_DEFAULT_ZONE: http://discovery-service:8761/eureka
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - config-service
+      - discovery-service
+      - identity-service
+      - document-service
+      - ai-service
+    restart: unless-stopped
+
+volumes:
+  identity_db_data:
+  document_db_data:
+  document_uploads:
